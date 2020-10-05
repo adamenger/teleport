@@ -42,6 +42,8 @@ type AuthenticateUserRequest struct {
 	OTP *OTPCreds `json:"otp,omitempty"`
 	// Session is a web session credential used to authenticate web sessions
 	Session *SessionCreds `json:"session,omitempty"`
+	// AppURL is the address of the target application.
+	AppURL string `json:"app,omitempty"`
 }
 
 // CheckAndSetDefaults checks and sets defaults

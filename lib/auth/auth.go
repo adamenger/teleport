@@ -1320,16 +1320,16 @@ func (s *AuthServer) NewWebSession(username string, roles []string, traits wrapp
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	token, err := utils.CryptoRandomHex(TokenLenBytes)
+	token, err := utils.CryptoRandomHex(SessionTokenBytes)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	bearerToken, err := utils.CryptoRandomHex(TokenLenBytes)
+	bearerToken, err := utils.CryptoRandomHex(SessionTokenBytes)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
 	bearerTokenTTL := utils.MinTTL(sessionTTL, BearerTokenTTL)
-	return services.NewWebSession(token, services.WebSessionSpecV2{
+	return services.NewWebSession(token, services.KindWebSession, services.WebSessionSpecV2{
 		User:               user.GetName(),
 		Priv:               priv,
 		Pub:                certs.ssh,
@@ -1685,6 +1685,11 @@ func (a *AuthServer) modeStreamer() (events.Streamer, error) {
 }
 
 // GetApps is a part of the auth.AccessPoint implementation..
+func (a *AuthServer) GetAppWebSession(ctx context.Context, req services.GetAppWebSessionRequest) (services.WebSession, error) {
+	return a.GetCache().GetAppWebSession(ctx, req)
+}
+
+// GetApps is a part of the auth.AccessPoint implementation..
 func (a *AuthServer) GetAppSession(ctx context.Context, sessionID string) (services.AppSession, error) {
 	return a.GetCache().GetAppSession(ctx, sessionID)
 }
@@ -1753,8 +1758,12 @@ const (
 	// BearerTokenTTL specifies standard bearer token to exist before
 	// it has to be renewed by the client
 	BearerTokenTTL = 10 * time.Minute
+
 	// TokenLenBytes is len in bytes of the invite token
 	TokenLenBytes = 16
+
+	// SessionTokenBytes is the number of bytes of a web or application session.
+	SessionTokenBytes = 32
 )
 
 // oidcClient is internal structure that stores OIDC client and its config

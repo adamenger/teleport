@@ -2029,8 +2029,9 @@ func (process *TeleportProcess) getAdditionalPrincipals(role teleport.Role) ([]s
 //    2. proxy SSH connections to nodes running with 'node' role
 //    3. take care of reverse tunnels
 func (process *TeleportProcess) initProxy() error {
-	// if no TLS key was provided for the web UI, generate a self signed cert
-	if process.Config.Proxy.TLSKey == "" && !process.Config.Proxy.DisableTLS && !process.Config.Proxy.DisableWebService {
+	// If no TLS key was provided for the web UI, generate a self signed cert
+	//if process.Config.Proxy.TLSKey == "" && !process.Config.Proxy.DisableTLS && !process.Config.Proxy.DisableWebService {
+	if len(process.Config.Proxy.KeyPairs) == 0 && !process.Config.Proxy.DisableTLS && !process.Config.Proxy.DisableWebService {
 		err := initSelfSignedHTTPSCert(process.Config)
 		if err != nil {
 			return trace.Wrap(err)
@@ -2322,17 +2323,25 @@ func (process *TeleportProcess) initProxyEndpoint(conn *Connector) error {
 				ProxySettings: proxySettings,
 				CipherSuites:  cfg.CipherSuites,
 				FIPS:          cfg.FIPS,
+				AccessPoint:   accessPoint,
 			})
 		if err != nil {
 			return trace.Wrap(err)
 		}
 		proxyLimiter.WrapHandle(webHandler)
 		if !process.Config.Proxy.DisableTLS {
-			log.Infof("Using TLS cert %v, key %v", cfg.Proxy.TLSCert, cfg.Proxy.TLSKey)
-			tlsConfig, err := utils.CreateTLSConfiguration(cfg.Proxy.TLSCert, cfg.Proxy.TLSKey, cfg.CipherSuites)
-			if err != nil {
-				return trace.Wrap(err)
+			tlsConfig := utils.TLSConfig(cfg.CipherSuites)
+
+			for _, pair := range process.Config.Proxy.KeyPairs {
+				log.Infof("Loading TLS certificate %v and key %v.", pair.Certificate, pair.PrivateKey)
+
+				certificate, err := tls.LoadX509KeyPair(pair.Certificate, pair.PrivateKey)
+				if err != nil {
+					return trace.Wrap(err)
+				}
+				tlsConfig.Certificates = append(tlsConfig.Certificates, certificate)
 			}
+
 			listeners.web = tls.NewListener(listeners.web, tlsConfig)
 		}
 		webServer = &http.Server{
@@ -2786,9 +2795,9 @@ func (process *TeleportProcess) Close() error {
 }
 
 func validateConfig(cfg *Config) error {
-	if !cfg.Auth.Enabled && !cfg.SSH.Enabled && !cfg.Proxy.Enabled {
+	if !cfg.Auth.Enabled && !cfg.SSH.Enabled && !cfg.Proxy.Enabled && !cfg.Apps.Enabled {
 		return trace.BadParameter(
-			"config: supply at least one of Auth, SSH or Proxy roles")
+			"config: supply at least one of Auth, SSH, Proxy, or App roles")
 	}
 
 	if cfg.DataDir == "" {
@@ -2799,8 +2808,8 @@ func validateConfig(cfg *Config) error {
 		cfg.Console = ioutil.Discard
 	}
 
-	if (cfg.Proxy.TLSKey == "" && cfg.Proxy.TLSCert != "") || (cfg.Proxy.TLSKey != "" && cfg.Proxy.TLSCert == "") {
-		return trace.BadParameter("please supply both TLS key and certificate")
+	if cfg.Proxy.Enabled && len(cfg.Proxy.KeyPairs) == 0 {
+		return trace.BadParameter("please supply TLS key and certificate")
 	}
 
 	if len(cfg.AuthServers) == 0 {
@@ -2834,8 +2843,10 @@ func initSelfSignedHTTPSCert(cfg *Config) (err error) {
 	keyPath := filepath.Join(cfg.DataDir, defaults.SelfSignedKeyPath)
 	certPath := filepath.Join(cfg.DataDir, defaults.SelfSignedCertPath)
 
-	cfg.Proxy.TLSKey = keyPath
-	cfg.Proxy.TLSCert = certPath
+	cfg.Proxy.KeyPairs = append(cfg.Proxy.KeyPairs, KeyPairPath{
+		PrivateKey:  keyPath,
+		Certificate: certPath,
+	})
 
 	// return the existing pair if they have already been generated:
 	_, err = tls.LoadX509KeyPair(certPath, keyPath)
