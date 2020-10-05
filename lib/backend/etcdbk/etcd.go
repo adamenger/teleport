@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -217,9 +218,38 @@ func New(ctx context.Context, params backend.Params) (*EtcdBackend, error) {
 		watchDone:        make(chan struct{}),
 		buf:              buf,
 	}
+
 	if err = b.reconnect(); err != nil {
 		return nil, trace.Wrap(err)
 	}
+
+	// Check that the etcd nodes are at least the minimum version supported
+	timeout, cancel := context.WithTimeout(ctx, time.Second*3*time.Duration(len(cfg.Nodes)))
+	defer cancel()
+	for _, n := range cfg.Nodes {
+		status, err := b.client.Status(timeout, n)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+
+		vs := strings.Split(status.Version, ".")
+		var maj, min int
+		if len(vs) >= 2 {
+			if maj, err = strconv.Atoi(vs[0]); err != nil {
+				return nil, trace.Wrap(err)
+			}
+			if min, err = strconv.Atoi(vs[1]); err != nil {
+				return nil, trace.Wrap(err)
+			}
+		}
+
+		if maj < 3 || (maj == 3 && min < 3) {
+			return nil, trace.BadParameter("unsupported version of etcd %v for node %v, must be 3.3 or greater",
+				status.Version, n)
+		}
+
+	}
+
 	// Wrap backend in a input sanitizer and return it.
 	return b, nil
 }
