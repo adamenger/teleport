@@ -660,6 +660,9 @@ const (
 
 	// ChanSession is a SSH channel of type "session".
 	ChanSession = "session"
+
+	// ChanTCPIPForward is a SSH channel of type "tcpip-forward".
+	ChanTCPIPForward = "tcpip-forward"
 )
 
 // RSAKeySize is the size of the RSA key.

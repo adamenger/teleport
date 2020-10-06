@@ -982,6 +982,10 @@ func (s *Server) HandleNewChan(ctx context.Context, ccx *sshutils.ConnectionCont
 			}
 			go s.handleSessionRequests(ctx, ccx, identityContext, ch, requests)
 			return
+		case teleport.ChanTCPIPForward:
+			log.Printf("tcpip-forward: you are now in proxy mode")
+			rejectChannel(nch, ssh.UnknownChannelType, fmt.Sprintf("unknown channel type: %v", channelType))
+			return
 		default:
 			rejectChannel(nch, ssh.UnknownChannelType, fmt.Sprintf("unknown channel type: %v", channelType))
 			return
@@ -1055,6 +1059,9 @@ func (s *Server) HandleNewChan(ctx context.Context, ccx *sshutils.ConnectionCont
 			return
 		}
 		go s.handleDirectTCPIPRequest(ctx, ccx, identityContext, ch, req)
+	case teleport.ChanTCPIPForward:
+		log.Printf("tcpip-forward: you are now here")
+		rejectChannel(nch, ssh.UnknownChannelType, fmt.Sprintf("unknown channel type: %v", channelType))
 	default:
 		rejectChannel(nch, ssh.UnknownChannelType, fmt.Sprintf("unknown channel type: %v", channelType))
 	}
