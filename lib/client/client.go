@@ -1029,7 +1029,7 @@ func (c *NodeClient) remoteListenAndForward(ctx context.Context, conn net.Conn, 
 	defer c.Close()
 	log.Debugf("%v %v", conn.RemoteAddr().String(), remoteAddr)
 
-	listener, err := c.Client.Listen("tcp", remoteAddr)
+	listener, err := c.Client.Listen("tcp", conn.RemoteAddr().String())
 	if err != nil {
 		log.Debugf("listener err: %v", err)
 	}

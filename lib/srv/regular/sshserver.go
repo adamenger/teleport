@@ -843,11 +843,20 @@ func (s *Server) serveAgent(ctx *srv.ServerContext) error {
 func (s *Server) HandleRequest(r *ssh.Request) {
 	switch r.Type {
 	case teleport.KeepAliveReqType:
+		log.Debugf("Handling keepalive %+v", r)
 		s.handleKeepAlive(r)
 	case teleport.RecordingProxyReqType:
+		log.Debugf("Recording proxy %v", r)
 		s.handleRecordingProxy(r)
 	case teleport.VersionRequest:
+		log.Debugf("Version Request %v", r)
 		s.handleVersionRequest(r)
+	case teleport.TCPIPForwardRequest:
+		log.Debugf("tcpip-forward request %v", r)
+		s.handleTCPIPForwardRequest(r)
+	case teleport.CancelTCPIPForwardRequest:
+		log.Debugf("cancel-tcpip-forward request %v", r)
+		s.handleCancelTCPIPForwardRequest(r)
 	default:
 		if r.WantReply {
 			if err := r.Reply(false, nil); err != nil {
@@ -952,6 +961,7 @@ func (s *Server) HandleNewChan(ctx context.Context, ccx *sshutils.ConnectionCont
 
 	channelType := nch.ChannelType()
 	if s.proxyMode {
+		log.Debugf("handling new channel in proxy mode: %v", channelType)
 		switch channelType {
 		// Channels of type "direct-tcpip", for proxies, it's equivalent
 		// of teleport proxy: subsystem
@@ -992,7 +1002,9 @@ func (s *Server) HandleNewChan(ctx context.Context, ccx *sshutils.ConnectionCont
 		}
 	}
 
+	log.Debugf("handling new channel NOT in proxy mode: %v", channelType)
 	switch channelType {
+
 	// Channels of type "session" handle requests that are involved in running
 	// commands on a server, subsystem requests, and agent forwarding.
 	case teleport.ChanSession:
@@ -1060,8 +1072,21 @@ func (s *Server) HandleNewChan(ctx context.Context, ccx *sshutils.ConnectionCont
 		}
 		go s.handleDirectTCPIPRequest(ctx, ccx, identityContext, ch, req)
 	case teleport.ChanTCPIPForward:
-		log.Printf("tcpip-forward: you are now here")
-		rejectChannel(nch, ssh.UnknownChannelType, fmt.Sprintf("unknown channel type: %v", channelType))
+		log.Debugf("tcpip-forward: you are now here")
+		req, err := sshutils.ParseDirectTCPIPReq(nch.ExtraData())
+		if err != nil {
+			log.Errorf("Failed to parse request data: %v, err: %v.", string(nch.ExtraData()), err)
+			rejectChannel(nch, ssh.UnknownChannelType, "failed to parse direct-tcpip request")
+			return
+		}
+
+		ch, _, err := nch.Accept()
+		if err != nil {
+			log.Warnf("Unable to accept channel: %v.", err)
+			rejectChannel(nch, ssh.ConnectionFailed, fmt.Sprintf("unable to accept channel: %v", err))
+			return
+		}
+		go s.handleDirectTCPIPRequest(ctx, ccx, identityContext, ch, req)
 	default:
 		rejectChannel(nch, ssh.UnknownChannelType, fmt.Sprintf("unknown channel type: %v", channelType))
 	}
@@ -1487,6 +1512,67 @@ func (s *Server) handleVersionRequest(req *ssh.Request) {
 	if err != nil {
 		log.Debugf("Failed to reply to version request: %v.", err)
 	}
+}
+
+// handleDirectTCPIPRequest handles port forwarding requests.
+func (s *Server) handleTCPIPForwardRequest(req *ssh.Request) {
+	log.Debugf("Handling tcpip-forward request: %v", req)
+	log.Debugf("tcpip-forward request payload: %v", string(req.Payload[:]))
+
+	// parse the incoming tcpip-forward request
+	parsedHost, err := sshutils.ParseForwardTCPIPReq(req.Payload)
+	if err != nil {
+		log.Debugf("Failed to parse tcpip-forward request: %v", err)
+	}
+	log.Debugf("parse results: %v", parsedHost)
+
+	// set port to p
+	var p struct {
+		Port uint32
+	}
+
+	// respond to request with true
+	err = req.Reply(true, ssh.Marshal(&p))
+	if err != nil {
+		log.Debugf("Failed to reply to tcpip-forward request: %v.", err)
+	}
+
+}
+
+/// handleDirectTCPIPRequest handles port forwarding requests.
+func (s *Server) handleCancelTCPIPForwardRequest(req *ssh.Request) {
+	// respond to request with true
+	err := req.Reply(true, ssh.Marshal(&p))
+
+	if err != nil {
+		log.Debugf("Failed to reply to tcpip-forward request: %v.", err)
+	}
+
+}
+
+// handleDirectTCPIPRequest handles port forwarding requests.
+func (s *Server) handleTCPIPForwardRequest(req *ssh.Request) {
+	log.Debugf("Handling tcpip-forward request: %v", req)
+	log.Debugf("tcpip-forward request payload: %v", string(req.Payload[:]))
+
+	// parse the incoming tcpip-forward request
+	parsedHost, err := sshutils.ParseForwardTCPIPReq(req.Payload)
+	if err != nil {
+		log.Debugf("Failed to parse tcpip-forward request: %v", err)
+	}
+	log.Debugf("parse results: %v", parsedHost)
+
+	// set port to p
+	var p struct {
+		Port uint32
+	}
+
+	// respond to request with true
+	err = req.Reply(true, ssh.Marshal(&p))
+	if err != nil {
+		log.Debugf("Failed to reply to tcpip-forward request: %v.", err)
+	}
+
 }
 
 // handleProxyJump handles ProxyJump request that is executed via direct tcp-ip dial on the proxy
