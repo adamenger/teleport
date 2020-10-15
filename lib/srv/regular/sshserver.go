@@ -1573,13 +1573,13 @@ func (s *Server) handleTCPIPForwardRequest(req *ssh.Request, ccx *sshutils.Conne
 
 /// handleDirectTCPIPRequest handles port forwarding requests.
 func (s *Server) handleCancelTCPIPForwardRequest(req *ssh.Request) {
-	// respond to request with true
-	//err := req.Reply(true, ssh.Marshal(&p))
+	log.Debugf("Handling cancel-tcpip-forward request: %v", req)
+	//respond to request with true
+	err := req.Reply(true, nil)
 
-	//if err != nil {
-	//	log.Debugf("Failed to reply to tcpip-forward request: %v.", err)
-	//}
-
+	if err != nil {
+		log.Debugf("Failed to reply to cancel-tcpip-forward request: %v.", err)
+	}
 }
 
 // handleDirectTCPIPRequest handles port forwarding requests.
