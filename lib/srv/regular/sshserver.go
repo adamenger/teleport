@@ -60,6 +60,14 @@ var log = logrus.WithFields(logrus.Fields{
 	trace.Component: teleport.ComponentNode,
 })
 
+// Used for setting up reverse tunnels
+type remoteForwardChannelData struct {
+	DestAddr   string
+	DestPort   uint32
+	OriginAddr string
+	OriginPort uint32
+}
+
 // Server implements SSH server that uses configuration backend and
 // certificate-based authentication
 type Server struct {
@@ -840,7 +848,7 @@ func (s *Server) serveAgent(ctx *srv.ServerContext) error {
 // req.Reply(false, nil).
 //
 // For more details: https://tools.ietf.org/html/rfc4254.html#page-4
-func (s *Server) HandleRequest(r *ssh.Request) {
+func (s *Server) HandleRequest(r *ssh.Request, ccx *sshutils.ConnectionContext) {
 	switch r.Type {
 	case teleport.KeepAliveReqType:
 		log.Debugf("Handling keepalive %+v", r)
@@ -853,7 +861,7 @@ func (s *Server) HandleRequest(r *ssh.Request) {
 		s.handleVersionRequest(r)
 	case teleport.TCPIPForwardRequest:
 		log.Debugf("tcpip-forward request %v", r)
-		s.handleTCPIPForwardRequest(r)
+		s.handleTCPIPForwardRequest(r, ccx)
 	case teleport.CancelTCPIPForwardRequest:
 		log.Debugf("cancel-tcpip-forward request %v", r)
 		s.handleCancelTCPIPForwardRequest(r)
@@ -992,17 +1000,12 @@ func (s *Server) HandleNewChan(ctx context.Context, ccx *sshutils.ConnectionCont
 			}
 			go s.handleSessionRequests(ctx, ccx, identityContext, ch, requests)
 			return
-		case teleport.ChanTCPIPForward:
-			log.Printf("tcpip-forward: you are now in proxy mode")
-			rejectChannel(nch, ssh.UnknownChannelType, fmt.Sprintf("unknown channel type: %v", channelType))
-			return
 		default:
 			rejectChannel(nch, ssh.UnknownChannelType, fmt.Sprintf("unknown channel type: %v", channelType))
 			return
 		}
 	}
 
-	log.Debugf("handling new channel NOT in proxy mode: %v", channelType)
 	switch channelType {
 
 	// Channels of type "session" handle requests that are involved in running
@@ -1064,22 +1067,6 @@ func (s *Server) HandleNewChan(ctx context.Context, ccx *sshutils.ConnectionCont
 			rejectChannel(nch, ssh.UnknownChannelType, "failed to parse direct-tcpip request")
 			return
 		}
-		ch, _, err := nch.Accept()
-		if err != nil {
-			log.Warnf("Unable to accept channel: %v.", err)
-			rejectChannel(nch, ssh.ConnectionFailed, fmt.Sprintf("unable to accept channel: %v", err))
-			return
-		}
-		go s.handleDirectTCPIPRequest(ctx, ccx, identityContext, ch, req)
-	case teleport.ChanTCPIPForward:
-		log.Debugf("tcpip-forward: you are now here")
-		req, err := sshutils.ParseDirectTCPIPReq(nch.ExtraData())
-		if err != nil {
-			log.Errorf("Failed to parse request data: %v, err: %v.", string(nch.ExtraData()), err)
-			rejectChannel(nch, ssh.UnknownChannelType, "failed to parse direct-tcpip request")
-			return
-		}
-
 		ch, _, err := nch.Accept()
 		if err != nil {
 			log.Warnf("Unable to accept channel: %v.", err)
@@ -1515,9 +1502,8 @@ func (s *Server) handleVersionRequest(req *ssh.Request) {
 }
 
 // handleDirectTCPIPRequest handles port forwarding requests.
-func (s *Server) handleTCPIPForwardRequest(req *ssh.Request) {
+func (s *Server) handleTCPIPForwardRequest(req *ssh.Request, ccx *sshutils.ConnectionContext) {
 	log.Debugf("Handling tcpip-forward request: %v", req)
-	log.Debugf("tcpip-forward request payload: %v", string(req.Payload[:]))
 
 	// parse the incoming tcpip-forward request
 	parsedHost, err := sshutils.ParseForwardTCPIPReq(req.Payload)
@@ -1525,6 +1511,52 @@ func (s *Server) handleTCPIPForwardRequest(req *ssh.Request) {
 		log.Debugf("Failed to parse tcpip-forward request: %v", err)
 	}
 	log.Debugf("parse results: %v", parsedHost)
+
+	tunnelListener := fmt.Sprintf("%v:%v", s.addr.Host(), parsedHost.Port)
+	log.Debugf(tunnelListener)
+	ln, err := net.Listen("tcp", tunnelListener)
+	if err != nil {
+		log.Debugf("error starting server side listener: %v", err)
+	}
+
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				// TODO: log accept failure
+				break
+			}
+
+			payload := ssh.Marshal(&remoteForwardChannelData{
+				DestAddr:   parsedHost.Host,
+				DestPort:   uint32(parsedHost.Port),
+				OriginAddr: parsedHost.Host,
+				OriginPort: uint32(parsedHost.Port),
+			})
+
+			go func() {
+				ch, _, err := ccx.ServerConn.OpenChannel(teleport.ChanTCPIPForward, payload)
+				if err != nil {
+					// TODO: log failure to open channel
+					log.Println(err)
+					c.Close()
+					return
+				}
+
+				go func() {
+					defer ch.Close()
+					defer c.Close()
+					io.Copy(ch, c)
+				}()
+
+				go func() {
+					defer ch.Close()
+					defer c.Close()
+					io.Copy(c, ch)
+				}()
+			}()
+		}
+	}()
 
 	// set port to p
 	var p struct {
@@ -1542,11 +1574,11 @@ func (s *Server) handleTCPIPForwardRequest(req *ssh.Request) {
 /// handleDirectTCPIPRequest handles port forwarding requests.
 func (s *Server) handleCancelTCPIPForwardRequest(req *ssh.Request) {
 	// respond to request with true
-	err := req.Reply(true, ssh.Marshal(&p))
+	//err := req.Reply(true, ssh.Marshal(&p))
 
-	if err != nil {
-		log.Debugf("Failed to reply to tcpip-forward request: %v.", err)
-	}
+	//if err != nil {
+	//	log.Debugf("Failed to reply to tcpip-forward request: %v.", err)
+	//}
 
 }
 
